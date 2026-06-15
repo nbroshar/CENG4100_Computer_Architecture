@@ -1,0 +1,52 @@
+# Tiny Tapeout project information
+project:
+  title:        "RV32I teaching core"
+  author:       "YOUR NAME"
+  discord:      ""
+  description:  "A small single-cycle RV32I processor with on-chip ROM/RAM; runs a demo program and reports the result byte-by-byte."
+  language:     "Verilog"
+  clock_hz:     0
+  # A single tile is about 167x108 uM. The 32x32 register file dominates area;
+  # start at 2x2 and adjust after reading the LibreLane area report.
+  tiles:        "2x2"   # Valid: 1x1, 1x2, 2x2, 3x2, 4x2, 6x2, 8x2
+  # Top module must start with "tt_um_". Make it unique (e.g. add your username).
+  top_module:   "tt_um_rv32i"
+  # List every source file under ./src separately. Also update PROJECT_SOURCES
+  # in test/Makefile to match.
+  source_files:
+    - "project.v"
+    - "rv32i.v"
+    - "tt_rom.v"
+
+# Pinout (for the datasheet/website). Leave unused pins blank; do not add/remove.
+pinout:
+  # Inputs
+  ui[0]: "result byte select bit 0"
+  ui[1]: "result byte select bit 1"
+  ui[2]: ""
+  ui[3]: ""
+  ui[4]: ""
+  ui[5]: ""
+  ui[6]: ""
+  ui[7]: ""
+  # Outputs
+  uo[0]: "result[0] (selected byte)"
+  uo[1]: "result[1]"
+  uo[2]: "result[2]"
+  uo[3]: "result[3]"
+  uo[4]: "result[4]"
+  uo[5]: "result[5]"
+  uo[6]: "result[6]"
+  uo[7]: "result[7]"
+  # Bidirectional pins
+  uio[0]: "done (output)"
+  uio[1]: ""
+  uio[2]: ""
+  uio[3]: ""
+  uio[4]: ""
+  uio[5]: ""
+  uio[6]: ""
+  uio[7]: ""
+
+# Do not change!
+yaml_version: 6
