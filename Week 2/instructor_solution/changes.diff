@@ -1,0 +1,64 @@
+--- a/rtl/rv32i.v
++++ b/rtl/rv32i.v
+@@ -52,7 +52,12 @@
+             4'd7:  y = sa >>> b[4:0];
+             4'd8:  y = (sa <  sb) ? 32'd1 : 32'd0;
+             4'd9:  y = (a  <  b)  ? 32'd1 : 32'd0;
+-            // 4'd10: y = ... ;                                   // <<< EXTEND
++            4'd10: begin : PCNT
++                integer k; reg [5:0] cc;
++                cc = 0;
++                for (k = 0; k < 32; k = k + 1) cc = cc + a[k];
++                y = {26'd0, cc};
++            end
+             default: y = 32'd0;
+         endcase
+     end
+@@ -134,7 +139,7 @@
+             7'b1100111: begin regwrite=1; immsrc=0; alusrcB=1; resultsrc=2; jalr=1; aluop=2'd0; end    // jalr
+             7'b0110111: begin regwrite=1; immsrc=3; resultsrc=3; end                                  // lui
+             7'b0010111: begin regwrite=1; immsrc=3; alusrcA=1; alusrcB=1; aluop=2'd0; end              // auipc
+-            // 7'b0001011: ... custom-0 ...                                                            // <<< EXTEND
++            7'b0001011: begin regwrite=1; alusrcB=0; aluop=2'd3; end                                    // custom-0: pcnt
+             default: ; // nop
+         endcase
+     end
+@@ -155,7 +160,7 @@
+         case (aluop)
+             2'd0: aluctrl = 4'd0;             // add: load/store/jalr/auipc address
+             2'd1: aluctrl = 4'd1;             // sub: reserved (branch compares live in the CPU)
+-            default: begin                    // 2'd2: decode from funct fields
++            2'd2: begin                       // decode from funct fields
+                 case (funct3)
+                     3'b000: aluctrl = (op5 & funct7b5) ? 4'd1 : 4'd0; // sub : add
+                     3'b001: aluctrl = 4'd5;                            // sll
+@@ -168,6 +173,8 @@
+                     default: aluctrl = 4'd0;                           // <<< EXTEND
+                 endcase
+             end
++            2'd3: aluctrl = 4'd10;           // popcount (custom-0)
++            default: aluctrl = 4'd0;
+         endcase
+     end
+ endmodule
+--- a/verif/rv32i_iss.py
++++ b/verif/rv32i_iss.py
+@@ -105,6 +105,8 @@
+             wb(immU)
+         elif op == 0x17:      # auipc
+             wb((pc + immU) & MASK)
++        elif op == 0x0B:      # custom-0: pcnt rd, rs1
++            wb(bin(a).count("1"))
+         # else: nop (system/fence stubs)
+ 
+         if rd == 0:
+--- a/verif/asm.py
++++ b/verif/asm.py
+@@ -76,6 +76,7 @@
+         if op == "mv":  out.append(enc_i(reg(args[0]),reg(args[1]),0,0x0)); continue
+         if op == "li":  out.append(enc_i(reg(args[0]),0,imm(args[1]),0x0)); continue
+         if op == "j":   out.append(enc_j(0, imm(args[0],labels,pc,rel=True))); continue
++        if op == "pcnt": out.append(enc_i(reg(args[0]), reg(args[1]), 0, 0, op=0x0B)); continue
+         if op in R:
+             f7,f3 = R[op]; out.append(enc_r(reg(args[0]),reg(args[1]),reg(args[2]),f7,f3)); continue
+         if op in I:
