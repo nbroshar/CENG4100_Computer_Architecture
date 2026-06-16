@@ -1,0 +1,142 @@
+--- a/rtl/rv32i.v
++++ b/rtl/rv32i.v
+@@ -230,12 +230,53 @@
+ 
+     // ---- Data memory port ----
+     assign dmem_addr  = aluresult;
+-    assign dmem_wdata = rd2;
++    assign dmem_wdata = storedata;
+     assign dmem_we    = memwrite;
+ 
++    // ---- Sub-word memory: lane select, extend (loads), merge (stores) ----
++    wire [1:0] boff = aluresult[1:0];   // byte offset within the word
++
++    reg [31:0] loaddata;                // dmem_rdata extracted + extended by funct3
++    always @(*) begin
++        case (funct3)
++            3'b000: case (boff)         // lb  (signed byte)
++                        2'd0: loaddata = {{24{dmem_rdata[7]}},  dmem_rdata[7:0]};
++                        2'd1: loaddata = {{24{dmem_rdata[15]}}, dmem_rdata[15:8]};
++                        2'd2: loaddata = {{24{dmem_rdata[23]}}, dmem_rdata[23:16]};
++                        2'd3: loaddata = {{24{dmem_rdata[31]}}, dmem_rdata[31:24]};
++                    endcase
++            3'b100: case (boff)         // lbu (unsigned byte)
++                        2'd0: loaddata = {24'b0, dmem_rdata[7:0]};
++                        2'd1: loaddata = {24'b0, dmem_rdata[15:8]};
++                        2'd2: loaddata = {24'b0, dmem_rdata[23:16]};
++                        2'd3: loaddata = {24'b0, dmem_rdata[31:24]};
++                    endcase
++            3'b001: loaddata = boff[1] ? {{16{dmem_rdata[31]}}, dmem_rdata[31:16]}   // lh
++                                       : {{16{dmem_rdata[15]}}, dmem_rdata[15:0]};
++            3'b101: loaddata = boff[1] ? {16'b0, dmem_rdata[31:16]}                  // lhu
++                                       : {16'b0, dmem_rdata[15:0]};
++            default: loaddata = dmem_rdata;                                          // lw
++        endcase
++    end
++
++    reg [31:0] storedata;               // rd2 merged into the addressed word by funct3
++    always @(*) begin
++        case (funct3)
++            3'b000: case (boff)         // sb
++                        2'd0: storedata = {dmem_rdata[31:8],  rd2[7:0]};
++                        2'd1: storedata = {dmem_rdata[31:16], rd2[7:0], dmem_rdata[7:0]};
++                        2'd2: storedata = {dmem_rdata[31:24], rd2[7:0], dmem_rdata[15:0]};
++                        2'd3: storedata = {rd2[7:0], dmem_rdata[23:0]};
++                    endcase
++            3'b001: storedata = boff[1] ? {rd2[15:0], dmem_rdata[15:0]}              // sh
++                                        : {dmem_rdata[31:16], rd2[15:0]};
++            default: storedata = rd2;                                               // sw
++        endcase
++    end
++
+     // ---- Writeback mux ----                                   // <<< EXTEND
+     assign result = (resultsrc == 2'd0) ? aluresult  :
+-                    (resultsrc == 2'd1) ? dmem_rdata :
++                    (resultsrc == 2'd1) ? loaddata   :
+                     (resultsrc == 2'd2) ? pcplus4    :
+                                           imm;        // lui
+ 
+--- a/rtl/rv32i_sim_top.v
++++ b/rtl/rv32i_sim_top.v
+@@ -31,6 +31,8 @@
+ 
+     // Data RAM (1024 words), async read for single-cycle loads.
+     reg [31:0] dmem [0:1023];
++    integer di;
++    initial for (di = 0; di < 1024; di = di + 1) dmem[di] = 32'd0;
+     assign dmem_rdata = dmem[dmem_addr[11:2]];
+ 
+     always @(posedge clk) begin
+--- a/verif/rv32i_iss.py
++++ b/verif/rv32i_iss.py
+@@ -83,13 +83,39 @@
+                  0x1: a << sh,
+                  0x5: (sgn(a) >> sh) if (f7 == 0x20) else (a >> sh)}[f3]
+             wb(r)
+-        elif op == 0x03:      # lw
++        elif op == 0x03:      # loads: lb lh lw lbu lhu
+             addr = (a + immI) & MASK
+-            wb(self._ld(addr))
+-        elif op == 0x23:      # sw
++            word = self._ld(addr)
++            off  = addr & 3
++            if f3 == 0:        # lb  (signed byte)
++                bb = (word >> (8 * off)) & 0xFF
++                wb(bb - 0x100 if bb & 0x80 else bb)
++            elif f3 == 4:      # lbu (unsigned byte)
++                wb((word >> (8 * off)) & 0xFF)
++            elif f3 == 1:      # lh  (signed half)
++                sh = 16 if (addr & 2) else 0
++                hh = (word >> sh) & 0xFFFF
++                wb(hh - 0x10000 if hh & 0x8000 else hh)
++            elif f3 == 5:      # lhu (unsigned half)
++                sh = 16 if (addr & 2) else 0
++                wb((word >> sh) & 0xFFFF)
++            else:              # lw
++                wb(word)
++        elif op == 0x23:      # stores: sb sh sw
+             addr = (a + immS) & MASK
+-            self._st(addr, b)
+-            c["mem_addr"], c["mem_val"] = addr, b & MASK
++            word = self._ld(addr)
++            off  = addr & 3
++            if f3 == 0:        # sb
++                msk = 0xFF << (8 * off)
++                merged = (word & ~msk & MASK) | ((b & 0xFF) << (8 * off))
++            elif f3 == 1:      # sh
++                sh = 16 if (addr & 2) else 0
++                msk = 0xFFFF << sh
++                merged = (word & ~msk & MASK) | ((b & 0xFFFF) << sh)
++            else:              # sw
++                merged = b & MASK
++            self._st(addr, merged)
++            c["mem_addr"], c["mem_val"] = addr, merged & MASK
+         elif op == 0x63:      # branches
+             take = {0x0: a == b, 0x1: a != b, 0x4: sgn(a) < sgn(b),
+                     0x5: sgn(a) >= sgn(b), 0x6: a < b, 0x7: a >= b}[f3]
+--- a/verif/asm.py
++++ b/verif/asm.py
+@@ -37,6 +37,8 @@
+ I = {"addi":0x0,"slti":0x2,"sltiu":0x3,"xori":0x4,"ori":0x6,"andi":0x7,
+      "slli":0x1,"srli":0x5,"srai":0x5}
+ B = {"beq":0x0,"bne":0x1,"blt":0x4,"bge":0x5,"bltu":0x6,"bgeu":0x7}
++LOADS  = {"lb":0x0,"lh":0x1,"lw":0x2,"lbu":0x4,"lhu":0x5}
++STORES = {"sb":0x0,"sh":0x1,"sw":0x2}
+ 
+ def enc_r(rd,rs1,rs2,f7,f3): return (f7<<25)|(rs2<<20)|(rs1<<15)|(f3<<12)|(rd<<7)|0x33
+ def enc_i(rd,rs1,im,f3,op=0x13): return ((im&0xFFF)<<20)|(rs1<<15)|(f3<<12)|(rd<<7)|op
+@@ -83,10 +85,10 @@
+             iv = imm(args[2])
+             if op == "srai": iv = (iv & 0x1F) | 0x400  # set funct7 bit 5
+             out.append(enc_i(reg(args[0]),reg(args[1]),iv,f3)); continue
+-        if op == "lw":
+-            off, base = parse_mem(args[1]); out.append(enc_i(reg(args[0]),base,off,0x2,op=0x03)); continue
+-        if op == "sw":
+-            off, base = parse_mem(args[1]); out.append(enc_s(base,reg(args[0]),off,0x2)); continue
++        if op in LOADS:
++            off, base = parse_mem(args[1]); out.append(enc_i(reg(args[0]),base,off,LOADS[op],op=0x03)); continue
++        if op in STORES:
++            off, base = parse_mem(args[1]); out.append(enc_s(base,reg(args[0]),off,STORES[op])); continue
+         if op in B:
+             out.append(enc_b(reg(args[0]),reg(args[1]),imm(args[2],labels,pc,rel=True),B[op])); continue
+         if op == "lui":   out.append(enc_u(reg(args[0]),imm(args[1]),0x37)); continue
