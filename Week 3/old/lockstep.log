@@ -1,7 +1,0 @@
-$ python3 asm.py subword_test.s -o program.hex
-assembled 20 instructions -> program.hex
-$ make sim
-cocotb                             Running on Icarus Verilog version 12.0 (stable)
-cocotb.rv32i_sim_top               lockstep OK: 20 instructions matched, halt at 0x0000004c
-cocotb.regression                  test_lockstep.lockstep passed
-** TESTS=1 PASS=1 FAIL=0 SKIP=0                220.00           0.01      23101.01  **
